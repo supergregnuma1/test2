@@ -1,0 +1,147 @@
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(ggplot2)
+
+# Load the PBMC dataset
+pbmc.data <- Read10X(data.dir = "E:\\grega\\OneDrive - University of Southern California/R-Scripts/Raw Data/Tutorial-Peripheral Blood Mononuclear Cells/pbmc3k_filtered_gene_bc_matrices/filtered_gene_bc_matrices/hg19/")
+# Initialize the Seurat object with the raw (non-normalized data).
+pbmc <- CreateSeuratObject(counts = pbmc.data, project = "pbmc3k", min.cells = 3, min.features = 200)
+
+
+# Lets examine a few genes in the first thirty cells
+pbmc.data[c("CD3D", "TCL1A", "MS4A1"), 1:30]
+
+dense.size <- object.size(as.matrix(pbmc.data))
+dense.size
+
+sparse.size <- object.size(pbmc.data)
+sparse.size
+
+dense.size/sparse.size
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+#show QC metrics for the first 5 cells
+head(pbmc@meta.data)
+
+# Visualize QC metrics as a violin plot
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+
+
+#Filter out for feature and mitochondria pct.
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+
+
+#Normalize Data (normilization meth: LogNormalize and scale.factor:10000 these are default and can be called by just using pbmc <- NormalizeData(pbmc))
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+
+#Find the variable features
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(pbmc), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(pbmc)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+
+#SCale the data, shifting the mean expression across genes is 0
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+#PCA (principle compenent analysis)
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+
+# Examine and visualize PCA results a few different ways
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+
+#Clustering across 2 PCs
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+
+#
+DimPlot(pbmc, reduction = "pca")
+
+# Create Heatmap of PC1 set by dim 1
+DimHeatmap(pbmc, dims = 2, cells = 500, balanced = TRUE)
+
+# Create Heatmap of each PC 1-15
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+
+
+# NOTE: This process can take a long time for big datasets, comment out for expediency. More
+# approximate techniques such as those implemented in ElbowPlot() can be used to reduce
+# computation time
+#Run Jackstraw analysis to determine dimentionality and # of PCs to use
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+#asking for score for first 20 dims
+pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
+
+#Visualize Jackstraw plot for 1-15
+JackStrawPlot(pbmc, dims = 1:15)
+
+#Elbow Plot
+ElbowPlot(pbmc)
+
+#Finding Neighbors and Clustering
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+
+# Look at cluster IDs of the first 5 cells
+head(Idents(pbmc), 5)
+
+# If you haven't installed UMAP, you can do so via reticulate::py_install(packages =
+# 'umap-learn')
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+
+#Running TSNE
+pbmc <- RunTSNE(pbmc, dims =1:10)
+TSNEPlot(pbmc)
+
+# note that you can set `label = TRUE` or use the LabelClusters function to help label
+# individual clusters
+DimPlot(pbmc, reduction = "umap", label = T)
+
+
+#Save the file RDS
+saveRDS(pbmc, file = "E:\\grega\\OneDrive - University of Southern California/R-Scripts/pbmc.gz")
+
+# find all markers of cluster 1
+cluster1.markers <- FindMarkers(pbmc, ident.1 = 1, min.pct = 0.25)
+head(cluster1.markers, n = 5)
+
+# find all markers distinguishing cluster 5 from clusters 0 and 3
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3), min.pct = 0.25)
+head(cluster5.markers, n = 5)
+
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+pbmc.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_logFC)
+
+#ROc test returns the classification power
+cluster1.markers <- FindMarkers(pbmc, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+
+#Violin plot shows expression of genes across the clusters
+VlnPlot(pbmc, features = c("MS4A1", "CD79A"))
+
+#RidgePlot, horizontal
+RidgePlot(pbmc, features = c("LYZ", "CCL5", "IL32"))
+
+#Feature Plot, plots expression against the tsne/umap
+FeaturePlot(pbmc, features = c("MS4A1", "GNLY", "CD3E", "CD14", "FCER1A", "FCGR3A", "LYZ", "PPBP", "CD8A"))
+
+#Dimensional Heatmap across the clusters
+                    top10 <- pbmc.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+DoHeatmap(pbmc, features = top10$gene) + NoLegend()
+
+write.csv(pbmc.markers, file = "E:\\grega\\OneDrive - University of Southern California/R-Scripts/pbmc_DEG.csv")
